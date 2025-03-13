@@ -1,6 +1,7 @@
+
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import logo from '../Assets/Urban-Systems-logo.jpg'; // Assuming the logo is in the same directory
+import logo from '../Assets/Urban-Systems-logo.jpg';
 
 const styles = {
   page: {
@@ -66,6 +67,13 @@ const styles = {
     marginBottom: '10px',
     textAlign: 'center',
   },
+  forgotPassword: {
+    color: '#d32f2f',
+    cursor: 'pointer',
+    marginTop: '10px',
+    display: 'block',
+    textDecoration: 'underline',
+  },
 };
 
 const LoginForm = () => {
@@ -85,15 +93,13 @@ const LoginForm = () => {
         body: JSON.stringify({ email, password }),
       });
 
+      const data = await response.json();
       if (!response.ok) {
-        const errorData = await response.json();
-        let errorMessage = 'Login failed';
-        if (typeof errorData.detail === 'string') {
-          errorMessage = errorData.detail;
-        }
-        setErrorMsg(errorMessage);
+        setErrorMsg(data.detail || 'Login failed');
       } else {
-        navigate('/main');
+        // Save email in session storage for MFA
+        sessionStorage.setItem('email', email);
+        navigate('/mfa'); // Redirect to MFA page
       }
     } catch (error) {
       console.error('Error during login:', error);
@@ -127,6 +133,7 @@ const LoginForm = () => {
           <button type="submit" style={styles.button}>Login</button>
         </form>
         <button onClick={() => navigate('/register')} style={styles.registerButton}>Register</button>
+        <a onClick={() => navigate('/forgot-password')} style={styles.forgotPassword}>Forgot Password?</a>
       </div>
     </div>
   );
