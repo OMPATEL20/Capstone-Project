@@ -1,3 +1,39 @@
+// import React, { useState } from "react";
+// import { useParams } from "react-router-dom";
+
+// const ResetPassword = () => {
+//   const { token } = useParams();
+//   const [password, setPassword] = useState("");
+//   const [message, setMessage] = useState("");
+
+//   const handleSubmit = async (e) => {
+//     e.preventDefault();
+
+//     const response = await fetch("http://localhost:8000/api/reset-password", {
+//       method: "POST",
+//       headers: { "Content-Type": "application/json" },
+//       body: JSON.stringify({ token, new_password: password }),
+//     });
+
+//     const data = await response.json();
+//     setMessage(response.ok ? "Password reset successful!" : data.detail);
+//   };
+
+//   return (
+//     <div>
+//       <h2>Reset Password</h2>
+//       <form onSubmit={handleSubmit}>
+//         <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+//         <button type="submit">Reset Password</button>
+//       </form>
+//       {message && <p>{message}</p>}
+//     </div>
+//   );
+// };
+
+// export default ResetPassword;
+
+
 import React, { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Container, Card, Form, Button, Alert } from "react-bootstrap";
