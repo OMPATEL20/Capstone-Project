@@ -1,6 +1,7 @@
-
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ToastContainer, toast } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 import logo from '../Assets/Urban-Systems-logo.jpg';
 
 const styles = {
@@ -97,9 +98,18 @@ const LoginForm = () => {
       if (!response.ok) {
         setErrorMsg(data.detail || 'Login failed');
       } else {
-        // Save email in session storage for MFA
         sessionStorage.setItem('email', email);
-        navigate('/mfa'); // Redirect to MFA page
+        toast.success('🎉 Check OTP in EMail!', {
+          position: 'top-center',
+          autoClose: 2000,
+          hideProgressBar: false,
+          closeOnClick: true,
+          pauseOnHover: true,
+          draggable: true,
+          theme: 'colored',
+        });
+
+        setTimeout(() => navigate('/mfa'), 2200);
       }
     } catch (error) {
       console.error('Error during login:', error);
@@ -109,6 +119,7 @@ const LoginForm = () => {
 
   return (
     <div style={styles.page}>
+      <ToastContainer />
       <div style={styles.container}>
         <img src={logo} alt="Urban Systems Logo" style={styles.logo} />
         <div style={styles.header}>Urban Systems Login</div>
