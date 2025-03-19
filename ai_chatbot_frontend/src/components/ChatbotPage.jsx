@@ -1,26 +1,38 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import axios from "axios";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
+
 const ChatbotPage = () => {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState("");
   const [chatHistory, setChatHistory] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const navigate = useNavigate();
+  const chatEndRef = useRef(null); // Ref for scrolling to the latest message
 
+  // ✅ Initialize session on first load
   useEffect(() => {
     const storedSession = sessionStorage.getItem("chatSessionId");
     if (storedSession) {
       setSessionId(storedSession);
       fetchChatHistory(storedSession);
     } else {
-      const newSession = Math.random().toString(36).substring(7);
-      sessionStorage.setItem("chatSessionId", newSession);
-      setSessionId(newSession);
+      startNewSession();
     }
   }, []);
 
+  // ✅ Function to Start a New Chat Session
+  const startNewSession = () => {
+    const newSession = Math.random().toString(36).substring(7);
+    sessionStorage.setItem("chatSessionId", newSession);
+    setSessionId(newSession);
+    setMessages([]);
+    setChatHistory([]);
+  };
+
+  // ✅ Fetch Chat History from ChromaDB-backed API
   const fetchChatHistory = async (session) => {
     try {
       const res = await axios.get(`http://localhost:8000/api/chat/history/?session_id=${session}`);
@@ -32,24 +44,28 @@ const ChatbotPage = () => {
       console.error("Error fetching chat history:", error);
     }
   };
+
+  // ✅ Function to Logout
   const handleLogout = () => {
-    localStorage.removeItem("authToken"); // Adjust this based on how authentication is handled
-    navigate("/"); // Redirect to the login page
-};
+    localStorage.removeItem("authToken");
+    navigate("/");
+  };
+
+  // ✅ Handle Sending User Message
   const handleSend = async (e) => {
     e.preventDefault();
     const trimmed = input.trim();
     if (!trimmed) return;
 
     const newUserMessage = { sender: "user", text: trimmed };
-    const updatedMessages = [...messages, newUserMessage];
-    setMessages(updatedMessages);
-    setChatHistory([...chatHistory, { id: chatHistory.length, text: trimmed }]);
+    setMessages((prevMessages) => [...prevMessages, newUserMessage]);
+    setChatHistory((prevHistory) => [...prevHistory, { id: prevHistory.length, text: trimmed }]);
     setInput("");
     setLoading(true);
+    setError("");
 
     try {
-      const userId = "user-1234"; 
+      const userId = "user-1234"; // Ideally, fetch from authentication
       const timestamp = new Date().toISOString();
 
       const res = await axios.post("http://localhost:8000/api/chat/", {
@@ -58,24 +74,23 @@ const ChatbotPage = () => {
         user_id: userId,
         timestamp: timestamp
       });
-      
 
       const botMessage = {
         sender: "bot",
         text: res.data.response || "No response from AI",
       };
-      setMessages([...updatedMessages, botMessage]);
+      setMessages((prevMessages) => [...prevMessages, botMessage]);
     } catch (error) {
       console.error("Error sending message:", error);
-      const botErrorMsg = {
-        sender: "bot",
-        text: "Error: Unable to get a response from the server.",
-      };
-      setMessages([...updatedMessages, botErrorMsg]);
+      setError("Error: Unable to get a response from the server.");
     }
-
     setLoading(false);
   };
+
+  // ✅ Scroll to the bottom when a new message is added
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   return (
     <div style={{ display: "flex", height: "100vh" }}>
@@ -91,20 +106,14 @@ const ChatbotPage = () => {
             borderRadius: "5px",
             marginBottom: "15px",
           }}
-          onClick={() => {
-            const newSession = Math.random().toString(36).substring(7);
-            sessionStorage.setItem("chatSessionId", newSession);
-            setSessionId(newSession);
-            setMessages([]);
-            setChatHistory([]);
-          }}
+          onClick={startNewSession}
         >
           + New Chat
         </button>
 
         <select style={{ padding: "8px", marginBottom: "15px", width: "100%", backgroundColor: "#333", color: "white", border: "none", borderRadius: "5px" }}>
           <option value="gpt-4">GPT-4</option>
-          <option value="text-davinci-003">GPT</option>
+          <option value="gpt-4o-mini">GPT-4o Mini</option>
         </select>
 
         <div style={{ flex: 1, overflowY: "auto" }}>
@@ -185,6 +194,7 @@ const ChatbotPage = () => {
             </div>
           ))}
           {loading && <p style={{ textAlign: "center" }}>Thinking...</p>}
+          <div ref={chatEndRef} />
         </div>
 
         <form onSubmit={handleSend} style={{ marginTop: "10px", display: "flex" }}>
@@ -203,8 +213,6 @@ const ChatbotPage = () => {
               border: "none",
               borderRadius: "8px",
               marginLeft: "8px",
-              display: "flex",
-              alignItems: "center"
             }}
             type="submit"
           >
