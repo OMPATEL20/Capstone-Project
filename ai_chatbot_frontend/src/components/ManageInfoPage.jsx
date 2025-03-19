@@ -1,4 +1,3 @@
-// src/components/UrbanRegistrationForm.jsx
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -138,3 +137,4 @@ const UrbanRegistrationForm = () => {
 };
 
 export default UrbanRegistrationForm;
+
