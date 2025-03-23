@@ -1,3 +1,4 @@
+import json
 from fastapi import FastAPI, HTTPException, status, Query, BackgroundTasks
 from pydantic import BaseModel, EmailStr
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,36 +15,46 @@ import traceback
 from datetime import datetime
 import openai
 import random
+import hashlib
 import chromadb
 from langchain.vectorstores import Chroma
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.docstore.document import Document
 from typing import Optional
+from uuid import uuid4
 
 # Load environment variables
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# Initialize OpenAI client (NEW API FORMAT)
+openai.api_key = OPENAI_API_KEY
+
 if not OPENAI_API_KEY:
     raise ValueError("OpenAI API Key not found in environment variables.")
 
 # MongoDB Connection
-MONGO_DETAILS = os.getenv("MONGO_URL", "mongodb://localhost:27017")
+MONGO_DETAILS = os.getenv("MONGO_URI")
 mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_DETAILS)
 db = mongo_client.ai_chatbot_db
 users_collection = db.get_collection("users")
 chat_history_collection = db.get_collection("chat_history")
 admin_content_collection = db.get_collection("admin_content")
 events_collection = db.get_collection("Events")
+
 # SMTP Email Settings
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
 
+def generate_session_id(email: str) -> str:
+    """Generate a unique session_id based on the user's email."""
+    return hashlib.sha256(email.encode()).hexdigest() 
+
 # ChromaDB Setup
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
-vector_db = Chroma(collection_name="chat_data", embedding_function=OpenAIEmbeddings(api_key=OPENAI_API_KEY))
+vector_db = Chroma(collection_name="chat_data", embedding_function=OpenAIEmbeddings(api_key=OPENAI_API_KEY), client=chroma_client)
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
@@ -67,13 +78,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Pydantic Models
-# class RegisterRequest(BaseModel):
-#     name: str
-#     email: EmailStr
-#     password: str
-
 class RegisterRequest(BaseModel):
     name: str
     email: EmailStr
@@ -101,9 +105,11 @@ class ResetPasswordRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     query: str
-    session_id: str = None  
+    session_id: str = None
+    chat_id: str = None
     user_id: str = None
-    timestamp: str = None
+    # timestamp: str = None
+
 class ContentUpdate(BaseModel):
     title: str
     content: str
@@ -142,19 +148,6 @@ def send_email(email: str, subject: str, message: str):
         server.login(EMAIL_SENDER, EMAIL_PASSWORD)
         server.send_message(msg)
 
-# ✅ User Registration
-
-
-# @app.post("/api/register")
-# async def register(request: RegisterRequest):
-#     existing_user = await get_user_by_email(request.email)
-#     if existing_user:
-#         raise HTTPException(status_code=400, detail="Email already registered")
-    
-#     hashed_password = hash_password(request.password)
-#     new_user = {"name": request.name, "email": request.email, "password": hashed_password, "otp": None}
-#     await users_collection.insert_one(new_user)
-#     return {"message": "Registration successful"}
 
 @app.post("/api/register")
 async def register(request: RegisterRequest):
@@ -173,7 +166,7 @@ async def register(request: RegisterRequest):
     await users_collection.insert_one(new_user)
     return {"message": "Registration successful"}
 
-# ✅ Login & MFA OTP
+# Login & MFA OTP
 @app.post("/api/login")
 async def login(request: LoginRequest, background_tasks: BackgroundTasks):
     user = await get_user_by_email(request.email)
@@ -186,15 +179,11 @@ async def login(request: LoginRequest, background_tasks: BackgroundTasks):
     background_tasks.add_task(send_email, request.email, "Your OTP Code", f"Your OTP is: {otp_code}")
     return {"message": "OTP sent to your email", "email": request.email}
 
-# ✅ Verify OTP
-# @app.post("/api/verify-otp")
-# async def verify_otp(request: OTPRequest):
-#     user = await get_user_by_email(request.email)
-#     if not user or user.get("otp") != request.otp:
-#         raise HTTPException(status_code=401, detail="Invalid OTP")
 
-#     await users_collection.update_one({"email": request.email}, {"$unset": {"otp": ""}})
-#     return {"message": "MFA Successful"}
+@app.post("/api/chat/new")
+async def start_new_chat(session_id: str = Query(...)):
+    new_chat_id = str(uuid4())
+    return {"message": "New chat started", "chat_id": new_chat_id}
 
 
 @app.post("/api/verify-otp")
@@ -203,19 +192,26 @@ async def verify_otp(request: OTPRequest):
     if not user or user.get("otp") != request.otp:
         raise HTTPException(status_code=401, detail="Invalid OTP")
 
-    session_token = secrets.token_hex(32)
+    # session_token = secrets.token_hex(32)
+    session_id = generate_session_id(request.email)
+    chat_id = str(uuid4()) 
+
     await users_collection.update_one({"email": request.email}, {
-        "$set": {"session_token": session_token},
+        "$set": {
+            "session_id": session_id,
+            "chat_id": chat_id
+        },
         "$unset": {"otp": ""}
-    })
+    }, upsert=True)
 
     return {
         "message": "MFA Successful",
-        "session_token": session_token,
+        "session_id": session_id,
+        "chat_id": chat_id,
         "role": user.get("role", "user")  # user's role clearly returned
     }
 
-# ✅ Resend OTP
+#  Resend OTP
 @app.post("/api/resend-otp")
 async def resend_otp(request: ResendOTPRequest, background_tasks: BackgroundTasks):
     user = await get_user_by_email(request.email)
@@ -227,8 +223,6 @@ async def resend_otp(request: ResendOTPRequest, background_tasks: BackgroundTask
 
     background_tasks.add_task(send_email, request.email, "Your New OTP Code", f"Your new OTP is: {otp_code}")
     return {"message": "A new OTP has been sent to your email"}
-from bson import ObjectId
-from langchain.docstore.document import Document
 
 @app.post("/api/transfer-mongo")
 async def transfer_mongo():
@@ -265,7 +259,7 @@ async def transfer_mongo():
         print(f"❌ Error: {e}")
         return {"error": str(e)}
 
-# ✅ Retrieve Similar Documents (RAG)
+#  Retrieve Similar Documents (RAG) Memory based
 def retrieve_relevant_content(query):
     try:
         results = vector_db.similarity_search(query, k=3)
@@ -273,7 +267,7 @@ def retrieve_relevant_content(query):
     except Exception as e:
         return "No relevant information found."
 
-# ✅ Generate GPT-4o Mini Response with Retrieved Content
+#  Generate GPT-4o Mini Response with Retrieved Content
 def generate_response(query, retrieved_info):
     response = openai.ChatCompletion.create(
         model="gpt-4o-mini",
@@ -281,33 +275,152 @@ def generate_response(query, retrieved_info):
             {"role": "system", "content": "You are an AI chatbot that assists users."},
             {"role": "user", "content": f"Context: {retrieved_info}\nUser Query: {query}"},
         ],
-        api_key=OPENAI_API_KEY
+        temperature=0.7,
+        # api_key=OPENAI_API_KEY,
     )
     return response["choices"][0]["message"]["content"]
 
-# ✅ Chat API (Uses ChromaDB)
+@app.get("/api/chat/all-chats")
+async def get_all_chats(session_id: str = Query(...)):
+    try:
+        results = vector_db.get(where={"session_id": session_id})
+        chats = []
+
+        for doc, meta in zip(results["documents"], results["metadatas"]):
+            chat_id = meta.get("chat_id")
+            messages = json.loads(meta.get("messages", "[]"))
+            preview = messages[0]["message"] if messages else "New Chat"
+            chats.append({
+                "chat_id": chat_id,
+                "preview": preview,
+                "messages": [
+                    {"sender": msg["role"], "text": msg["message"]} for msg in messages
+                ]
+            })
+
+        return {"chats": chats}
+
+    except Exception as e:
+        print("❌ Error in get_all_chats:", e)
+        raise HTTPException(status_code=500, detail="Failed to load chats")
+
 @app.post("/api/chat/")
 async def chat(request: ChatRequest):
-    session_id = request.session_id or str(uuid.uuid4())
-    if not request.timestamp:
-        request.timestamp = datetime.utcnow().isoformat()
+    try:
+        print(f"🔍 Received: session_id={request.session_id}, chat_id={request.chat_id}, query='{request.query}'")
 
-    retrieved_context = retrieve_relevant_content(request.query)
-    response_text = generate_response(request.query, retrieved_context)
+        if not request.session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
+        if not request.chat_id:
+            raise HTTPException(status_code=400, detail="Chat ID is required")
 
-    chat_entry = {"session_id": session_id, "user_id": request.user_id, "query": request.query, "response": response_text, "timestamp": request.timestamp}
-    await chat_history_collection.insert_one(chat_entry)
+        user = await users_collection.find_one({"session_id": request.session_id})
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid session")
 
-    return {"session_id": session_id, "response": response_text}
+        chat_history = vector_db.get(ids=[request.chat_id])
+        existing_messages = json.loads(chat_history["documents"][0]) if chat_history["documents"] else []
+        existing_metadata = json.loads(chat_history["metadatas"][0]["messages"]) if chat_history["metadatas"] else []
 
-# ✅ API Status Endpoints
-@app.get("/api/hello")
-async def hello():
-    return {"message": "Hello from FastAPI using MongoDB and ChromaDB"}
+        # Generate AI response
+        response = openai.ChatCompletion.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an AI chatbot that assists users."},
+                *[ {"role": msg["role"], "content": msg["message"]} for msg in existing_metadata ],
+                {"role": "user", "content": request.query}
+            ],
+            temperature=0.7
+        )
 
-@app.get("/api/status")
-async def get_status():
-    return {"status": "Server is up and running"}
+        ai_response = response.choices[0].message.content
+
+        new_messages = existing_messages + [request.query, ai_response]
+        new_metadata = existing_metadata + [
+            {
+                "role": "user",
+                "message": request.query,
+                "session_id": request.session_id,
+                "chat_id": request.chat_id,
+                "timestamp": str(datetime.utcnow())
+            },
+            {
+                "role": "assistant",
+                "message": ai_response,
+                "session_id": request.session_id,
+                "chat_id": request.chat_id,
+                "timestamp": str(datetime.utcnow())
+            }
+        ]
+
+        vector_db.add_texts(
+            texts=[json.dumps(new_messages)],
+            metadatas=[{
+                "session_id": request.session_id,
+                "chat_id": request.chat_id,
+                "messages": json.dumps(new_metadata)
+            }],
+            ids=[request.chat_id]
+        )
+
+        print(f"📦 Stored in ChromaDB: chat_id={request.chat_id}")
+
+        return {
+            "response": ai_response,
+            "session_id": request.session_id,
+            "chat_id": request.chat_id
+        }
+
+    except Exception as e:
+        print(f"❌ Chat error: {e}")
+        return {"response": "Sorry, something went wrong.", "session_id": request.session_id}
+
+
+@app.get("/api/chat/history")
+async def get_chat_history(
+    session_id: str = Query(..., description="Chat session ID"),
+    chat_id: str = Query(..., description="Chat ID")
+):
+    try:
+        print(f"🔍 Fetching chat history for session_id={session_id} and chat_id={chat_id}")
+
+        # ✅ Fetch messages from ChromaDB using chat_id
+        results = vector_db.get(where={"chat_id": chat_id})
+
+        print(f"🔎 Raw ChromaDB results: {results}")
+
+        if not results or not results.get("documents"):
+            print("⚠️ No chat history found for this chat_id")
+            return {"session_id": session_id, "chat_id": chat_id, "history": []}
+
+        # Messages are stored as a JSON string, so we need to parse them
+        stored_messages = json.loads(results["documents"][0])
+        stored_metadata = json.loads(results["metadatas"][0]["messages"])
+
+        messages = []
+        for i in range(len(stored_messages)):
+            msg = {
+                "role": stored_metadata[i]["role"],
+                "message": stored_messages[i],
+                "timestamp": stored_metadata[i].get("timestamp", "")
+            }
+            messages.append(msg)
+
+        # Sort messages by timestamp before returning
+        messages.sort(key=lambda x: x["timestamp"])
+
+        print(f"✅ Final formatted chat history: {messages}")
+        
+        return {
+            "session_id": session_id,
+            "chat_id": chat_id,
+            "history": messages
+        }
+
+    except Exception as e:
+        print(f"❌ Error fetching ChromaDB history: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve chat history from ChromaDB.")
+
 @app.post("/api/forgot-password")
 async def forgot_password(request: ForgotPasswordRequest, background_tasks: BackgroundTasks):
     user = await get_user_by_email(request.email)
@@ -322,7 +435,7 @@ async def forgot_password(request: ForgotPasswordRequest, background_tasks: Back
     
     return {"message": "Password reset link has been sent to your email"}
 
-# ✅ Reset Password API
+#  Reset Password API
 @app.post("/api/reset-password")
 async def reset_password(request: ResetPasswordRequest):
     user = await users_collection.find_one({"reset_token": request.token})
@@ -336,16 +449,16 @@ async def reset_password(request: ResetPasswordRequest):
 @app.get("/api/check-chromadb")
 async def check_chromadb():
     try:
-        # ✅ Connect to ChromaDB
+        # Connect to ChromaDB
         chroma_client = chromadb.PersistentClient(path="./chroma_db")
 
-        # ✅ List collection names
+        #  List collection names
         collection_names = chroma_client.list_collections()
         
         if not collection_names:
             return {"message": "⚠️ No collections found in ChromaDB."}
 
-        # ✅ Fetch details for each collection
+        #  Fetch details for each collection
         collection_data = {}
         for collection_name in collection_names:
             vector_db = chroma_client.get_collection(collection_name)  # ✅ Fix: Now correctly fetches the collection
@@ -402,7 +515,7 @@ async def delete_markdown_content(content_id: str):
         raise HTTPException(404, "Content not found")
     return {"message": "Content deleted"}
 
-
+# to get whole chromdb connections
 @app.get("/api/get-whole-db")
 async def get_whole_db():
     try:
@@ -413,6 +526,7 @@ async def get_whole_db():
         all_documents = collection.get()
         
         return {
+            "all_documents": all_documents,
             "documents": all_documents["documents"],
             "metadatas": all_documents["metadatas"],
             "ids": all_documents["ids"]
@@ -420,15 +534,26 @@ async def get_whole_db():
     
     except Exception as e:
         return {"error": str(e)}
+    
 @app.post("/add-event/")
 async def add_event(event: Event):
     event_data = event.dict()
     await events_collection.insert_one(event_data)  # Use correct collection
     return {"message": "Event added successfully"}
 
-# ✅ API to Get Events
+#  API to Get Events
 @app.get("/events/", response_model=List[Event])
 async def get_events():
     events_cursor = events_collection.find({}, {"_id": 0})  # Exclude MongoDB ID
     events_list = await events_cursor.to_list(length=100)
     return events_list
+
+#  API Status Endpoints check
+@app.get("/api/hello")
+async def hello():
+    return {"message": "Hello from FastAPI using MongoDB and ChromaDB"}
+
+@app.get("/api/status")
+async def get_status():
+    return {"status": "Server is up and running"}
+
