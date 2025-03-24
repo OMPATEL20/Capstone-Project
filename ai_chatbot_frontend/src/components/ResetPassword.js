@@ -38,6 +38,7 @@ import React, { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Container, Card, Form, Button, Alert } from "react-bootstrap";
 import "bootstrap/dist/css/bootstrap.min.css";
+const BASE_URL = process.env.REACT_APP_API_URL;
 
 const ResetPassword = () => {
   const { token } = useParams();
@@ -61,7 +62,8 @@ const ResetPassword = () => {
     }
 
     try {
-      const response = await fetch("http://localhost:8000/api/reset-password", {
+     const response = await fetch(`${BASE_URL}/api/reset-password`, {
+
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, new_password: password }),
